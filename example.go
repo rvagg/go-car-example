@@ -211,31 +211,41 @@ func createIpldPrimeData(blockStore blockstore.Blockstore) (*cid.Cid, error) {
 	var lnk ipld.Link
 	var fnb = ipldfluent.WrapNodeBuilder(ipldfree.NodeBuilder())
 
+	linkBuilder := cidlink.LinkBuilder{cid.Prefix{
+		Version:  1,
+		Codec:    cid.DagCBOR,
+		MhType:   multihash.SHA2_256,
+		MhLength: -1,
+	}}
+
+	var blockBuilder = func(node ipld.Node) (ipld.Link, []byte, error) {
+		buf := bytes.Buffer{}
+		lnk, err = linkBuilder.Build(context.Background(), ipld.LinkContext{}, node,
+			func(ipld.LinkContext) (io.Writer, ipld.StoreCommitter, error) {
+				return &buf, func(lnk ipld.Link) error { return nil }, nil
+			},
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return lnk, buf.Bytes(), nil
+	}
+
+	// a linked list of blocks each referring to the previous
 	for i := 0; i < 10; i++ {
-		var n = fnb.CreateMap(func(mb ipldfluent.MapBuilder, knb ipldfluent.NodeBuilder, vnb ipldfluent.NodeBuilder) {
+		// create a map with the shape: { number: "one", previous: CID }
+		node := fnb.CreateMap(func(mb ipldfluent.MapBuilder, knb ipldfluent.NodeBuilder, vnb ipldfluent.NodeBuilder) {
 			mb.Insert(knb.CreateString("number"), vnb.CreateString(num2words.Convert(i)))
 			if lnk != nil {
 				mb.Insert(knb.CreateString("previous"), vnb.CreateLink(lnk))
 			}
 		})
 
-		lb := cidlink.LinkBuilder{cid.Prefix{
-			Version:  1,
-			Codec:    cid.DagCBOR,
-			MhType:   multihash.SHA2_256,
-			MhLength: -1,
-		}}
-		buf := bytes.Buffer{}
-		lnk, err = lb.Build(context.Background(), ipld.LinkContext{}, n,
-			func(ipld.LinkContext) (io.Writer, ipld.StoreCommitter, error) {
-				return &buf, func(lnk ipld.Link) error { return nil }, nil
-			},
-		)
-		if err != nil {
-			return nil, err
-		}
+		lnk, buf, err := blockBuilder(node)
+
 		cidLink, _ := lnk.(cidlink.Link)
-		blk, err := blocks.NewBlockWithCid(buf.Bytes(), cidLink.Cid)
+		blk, err := blocks.NewBlockWithCid(buf, cidLink.Cid)
 		if err != nil {
 			return nil, err
 		}
